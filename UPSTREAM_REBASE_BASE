@@ -1,0 +1,5 @@
+remote=anomalyco/openauth
+branch=master
+base=98dc59625e656eace1d7be165500af8ec351be41
+capturedAt=2026-05-20
+rebaseCadence=as-needed
