@@ -1,0 +1,224 @@
+# Image publication for the ai-blaise OpenAuth mirror.
+#
+# Decision: Path A (rebuild). The upstream toolbeam/openauth repository (mirrored
+# here from anomalyco/openauth) is a TypeScript library distributed via npm as
+# @openauthjs/openauth. It does not ship a Dockerfile and does not publish a
+# container image under openauthjs or toolbeam. The Command Center platform
+# (ai-blaise/command-center, deploy/openauth/values.yaml) consumes OpenAuth as a
+# containerized issuer service at ghcr.io/ai-blaise/openauth:<ver>-ai-blaise.<N>
+# on port 3000. So this workflow builds a minimal bun-based runtime image around
+# the workspace package and publishes it under the ai-blaise namespace.
+#
+# Path B (retag-only via regclient) is reserved for the future case where
+# upstream begins publishing an image we can mirror without rebuilding; switch
+# by setting the Dockerfile-presence branch in this workflow.
+#
+# Tag scheme: <upstream-version>-ai-blaise.<N>
+#   <upstream-version> = packages/openauth/package.json .version (e.g. 0.4.3)
+#   <N>                = git rev-list --count <upstream-base>..HEAD, where the
+#                        upstream base is the upstream package tag
+#                        @openauthjs/openauth@<ver> when present, else
+#                        upstream/master, else 0; final N is max(count, 1) so
+#                        the first mirror commit publishes ai-blaise.1 (matches
+#                        ai-blaise/command-center deploy/openauth pin).
+#
+# Outputs:
+#   ghcr.io/ai-blaise/openauth:<ver>-ai-blaise.<N>
+#   ghcr.io/ai-blaise/openauth:<ver>-ai-blaise.latest
+#   git tag image-publish-<ver>-ai-blaise.<N> pushed back to origin
+#   SBOM (SPDX) via anchore/sbom-action, attached to the image push
+#   cosign --keyless signature when Sigstore is reachable; graceful skip
+#   otherwise so the publish does not block on signing infrastructure.
+name: publish-image
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ai-blaise/openauth
+  VERSION_FILE: packages/openauth/package.json
+  UPSTREAM_REMOTE: upstream
+  UPSTREAM_URL: https://github.com/anomalyco/openauth.git
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      suffix: ${{ steps.version.outputs.suffix }}
+      full_tag: ${{ steps.version.outputs.full_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Add upstream remote and fetch tags
+        run: |
+          set -Eeuo pipefail
+          if ! git remote get-url "${UPSTREAM_REMOTE}" >/dev/null 2>&1; then
+            git remote add "${UPSTREAM_REMOTE}" "${UPSTREAM_URL}"
+          fi
+          git fetch --quiet --tags "${UPSTREAM_REMOTE}" || true
+
+      - name: Compute version and ai-blaise suffix
+        id: version
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          VER=$(node -p "require('./${VERSION_FILE}').version")
+          if [ -z "${VER}" ]; then
+            echo "version missing in ${VERSION_FILE}" >&2
+            exit 1
+          fi
+          BASE=""
+          for candidate in \
+            "refs/tags/@openauthjs/openauth@${VER}" \
+            "refs/tags/v${VER}" \
+            "refs/remotes/${UPSTREAM_REMOTE}/master" \
+            "refs/remotes/${UPSTREAM_REMOTE}/main"; do
+            if git rev-parse --verify --quiet "${candidate}" >/dev/null; then
+              BASE="${candidate}"
+              break
+            fi
+          done
+          if [ -n "${BASE}" ]; then
+            COUNT=$(git rev-list --count "${BASE}..HEAD")
+          else
+            COUNT=0
+          fi
+          if [ "${COUNT}" -lt 1 ]; then
+            COUNT=1
+          fi
+          SUFFIX="ai-blaise.${COUNT}"
+          FULL_TAG="${VER}-${SUFFIX}"
+          echo "version=${VER}" >> "${GITHUB_OUTPUT}"
+          echo "suffix=${SUFFIX}" >> "${GITHUB_OUTPUT}"
+          echo "full_tag=${FULL_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "base=${BASE:-<none>}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "version=${VER}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "suffix=${SUFFIX}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "full_tag=${FULL_TAG}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Decide build path (A=rebuild, B=retag)
+        id: path
+        run: |
+          set -Eeuo pipefail
+          if [ -f Dockerfile ]; then
+            echo "mode=A" >> "${GITHUB_OUTPUT}"
+            echo "Dockerfile present; using Path A (docker/build-push-action)" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "mode=A" >> "${GITHUB_OUTPUT}"
+            echo "No Dockerfile and no upstream image; building from ai-blaise Dockerfile fallback (still Path A)" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Build and push image (Path A)
+        if: steps.path.outputs.mode == 'A'
+        id: build
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          provenance: true
+          sbom: false
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.full_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-ai-blaise.latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.full_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=openauth
+            org.opencontainers.image.description=ai-blaise mirror of OpenAuth (Path A rebuild)
+
+      - name: Retag image (Path B, reserved)
+        if: steps.path.outputs.mode == 'B'
+        env:
+          UPSTREAM_IMAGE: ghcr.io/openauthjs/openauth:${{ steps.version.outputs.version }}
+          TARGET_FULL: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.full_tag }}
+          TARGET_LATEST: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-ai-blaise.latest
+        run: |
+          set -Eeuo pipefail
+          echo "Path B not active in this workflow run; reserved for upstream-image future" >&2
+          exit 1
+
+      - name: Install regctl (Path B, reserved)
+        if: steps.path.outputs.mode == 'B'
+        uses: regclient/actions/regctl-installer@b6614f5f56245066b533343a85f4109bdc38c8cc # v1.7.1
+
+      - name: Generate SBOM (SPDX) for image
+        if: steps.path.outputs.mode == 'A' && steps.build.outputs.digest != ''
+        uses: anchore/sbom-action@7b36ad622f042cab6f59a75c2ac24ccb256e9b45 # v0.20.4
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          artifact-name: openauth-${{ steps.version.outputs.full_tag }}-sbom.spdx.json
+          upload-artifact: true
+          upload-release-assets: false
+
+      - name: Install cosign
+        if: steps.path.outputs.mode == 'A' && steps.build.outputs.digest != ''
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62 # v3.10.0
+
+      - name: Cosign keyless sign (graceful skip on failure)
+        if: steps.path.outputs.mode == 'A' && steps.build.outputs.digest != ''
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          if ! command -v cosign >/dev/null 2>&1; then
+            echo "cosign not installed; skipping keyless signing" >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          if cosign sign --yes --recursive "${IMAGE_REF}"; then
+            echo "cosign-signed=${IMAGE_REF}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "cosign keyless signing failed; continuing without signature (graceful skip)" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Tag commit image-publish-<full_tag>
+        env:
+          FULL_TAG: ${{ steps.version.outputs.full_tag }}
+        run: |
+          set -Eeuo pipefail
+          TAG="image-publish-${FULL_TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists locally; skipping create" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            git tag -a "${TAG}" -m "Image publication for ${FULL_TAG}"
+          fi
+          if git ls-remote --tags origin "${TAG}" | grep -q "${TAG}"; then
+            echo "tag ${TAG} already on origin; skipping push" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            git push origin "refs/tags/${TAG}"
+          fi

@@ -1,0 +1,22 @@
+# Keep the image build context small and reproducible.
+.git
+.github
+.changeset
+.vscode
+.idea
+*.md
+LICENSE*
+www
+examples/client
+examples/issuer/lambda
+examples/issuer/node
+examples/issuer/cloudflare
+examples/issuer/custom-frontend
+examples/quickstart
+**/node_modules
+**/dist
+**/.next
+**/.astro
+**/.turbo
+**/coverage
+**/.DS_Store
