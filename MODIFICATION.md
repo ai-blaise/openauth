@@ -12,14 +12,14 @@ The Command Center platform (`ai-blaise/command-center`, plan v5 Section 15) req
 
 ## Modifications inventory
 
-| Path | Kind | Purpose |
-|------|------|---------|
+| Path                                  | Kind     | Purpose                                                                                                                                               |
+| ------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `.github/workflows/publish-image.yml` | additive | Builds and publishes the container image, attaches an SBOM, signs with cosign keyless when available, and tags the commit `image-publish-<full_tag>`. |
-| `Dockerfile` | additive | Minimal bun-based runtime around the workspace `@openauthjs/openauth` package and the `examples/issuer/bun` entrypoint (port 3000). |
-| `.dockerignore` | additive | Restricts the image build context to runtime-relevant paths. |
-| `MODIFICATION.md` | additive | This document. |
-| `IMAGE_PUBLICATION.md` | additive | Image pipeline operations + command-center consumption. |
-| `AI_BLAISE_MIRROR.md` | additive | Existing mirror policy statement (kept). |
+| `Dockerfile`                          | additive | Minimal bun-based runtime around the workspace `@openauthjs/openauth` package and the `examples/issuer/bun` entrypoint (port 3000).                   |
+| `.dockerignore`                       | additive | Restricts the image build context to runtime-relevant paths.                                                                                          |
+| `MODIFICATION.md`                     | additive | This document.                                                                                                                                        |
+| `IMAGE_PUBLICATION.md`                | additive | Image pipeline operations + command-center consumption.                                                                                               |
+| `AI_BLAISE_MIRROR.md`                 | additive | Existing mirror policy statement (kept).                                                                                                              |
 
 No upstream files are forked or strategically patched. Runtime composition (Citus adapter, OIDC Backstage module) is injected at deploy time by the platform helm chart `deploy/openauth` and the workspace package `@internal/openauth-storage-citus` in `ai-blaise/command-center`.
 

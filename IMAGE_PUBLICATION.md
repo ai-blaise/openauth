@@ -67,12 +67,12 @@ The SBOM is attached as a workflow artifact named `openauth-<ver>-ai-blaise.<N>-
 
 ### Failure modes
 
-| Failure | Behavior |
-|---------|----------|
-| Cosign / Sigstore unreachable | Logged in step summary, workflow continues; the image is still pushed and SBOM-attached. |
-| Tag `image-publish-<full_tag>` exists | Skipped (no-op); does not fail the workflow. |
-| Dockerfile missing | Workflow fails fast in the build step. Restore `Dockerfile` from history. |
-| Upstream remote unreachable | The `git fetch upstream` step uses `|| true`; `<N>` falls back to `1`. |
+| Failure                               | Behavior                                                                                 |
+| ------------------------------------- | ---------------------------------------------------------------------------------------- | --- | ----------------------------- |
+| Cosign / Sigstore unreachable         | Logged in step summary, workflow continues; the image is still pushed and SBOM-attached. |
+| Tag `image-publish-<full_tag>` exists | Skipped (no-op); does not fail the workflow.                                             |
+| Dockerfile missing                    | Workflow fails fast in the build step. Restore `Dockerfile` from history.                |
+| Upstream remote unreachable           | The `git fetch upstream` step uses `                                                     |     | true`; `<N>`falls back to`1`. |
 
 ### Audit links
 
